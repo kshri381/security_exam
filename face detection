@@ -1,0 +1,99 @@
+import cv2
+import mediapipe as mp
+import time
+
+# Initialize Mediapipe FaceMesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+# Start video capture
+cap = cv2.VideoCapture(0)
+
+# Timer for updates
+last_update_time = time.time()
+
+while cap.isOpened():
+    success, image = cap.read()
+    if not success:
+        break
+
+    # Preprocess image
+    image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
+    image.flags.writeable = False
+    results = face_mesh.process(image)
+    image.flags.writeable = True
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    img_h, img_w, _ = image.shape
+
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            # Get key landmarks
+            left_eye = face_landmarks.landmark[33]   # Left eye center
+            right_eye = face_landmarks.landmark[263] # Right eye center
+            nose = face_landmarks.landmark[1]        # Nose tip
+
+            # Convert to 2D coordinates
+            left_eye_x, left_eye_y = int(left_eye.x * img_w), int(left_eye.y * img_h)
+            right_eye_x, right_eye_y = int(right_eye.x * img_w), int(right_eye.y * img_h)
+            nose_x, nose_y = int(nose.x * img_w), int(nose.y * img_h)
+
+            # Compute midpoints
+            mid_eye_x = (left_eye.x + right_eye.x) / 2
+            mid_eye_y = (left_eye.y + right_eye.y) / 2
+
+            # Compute eye distance (used for scaling)
+            eye_distance = abs(right_eye.x - left_eye.x)
+
+            # Calculate *vertical movement* (nose relative to mid-eye line)
+            vertical_offset = (nose.y - mid_eye_y) / eye_distance  # Normalized by eye distance
+
+            # Calculate *horizontal movement* (left/right detection)
+            horizontal_offset = (nose.x - mid_eye_x) / eye_distance  
+
+            # Forward movement detection (nose z-depth)
+            forward_offset = nose.z  
+
+            # *Adaptive thresholds for accuracy*
+            horizontal_threshold = 0.08  # Left/Right sensitivity
+            vertical_threshold = 0.05    # Up/Down sensitivity (improved)
+            forward_threshold = -0.1     # Forward detection (negative z-value)
+
+            # *Determine head orientation*
+            if horizontal_offset > horizontal_threshold:
+                orientation = "Looking Right"
+            elif horizontal_offset < -horizontal_threshold:
+                orientation = "Looking Left"
+            elif vertical_offset > vertical_threshold:
+                orientation = "Looking Down"
+            elif vertical_offset < -vertical_threshold:
+                orientation = "Looking Up"
+            elif forward_offset < forward_threshold:  
+                orientation = "Moving Forward"
+            else:
+                orientation = "Neutral"
+
+            # Print orientation every 1 second
+            current_time = time.time()
+            if current_time - last_update_time >= 1:
+                print(f"Face Orientation: {orientation}")
+                last_update_time = current_time
+
+            # Draw landmarks on the image
+            for lm in face_landmarks.landmark:
+                x, y = int(lm.x * img_w), int(lm.y * img_h)
+                cv2.circle(image, (x, y), 1, (0, 255, 0), -1)
+
+            # Display orientation on frame
+            cv2.putText(image, f"Orientation: {orientation}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    # Show the image with landmarks
+    cv2.imshow('Face Orientation Detection', image)
+
+    # Break on 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
