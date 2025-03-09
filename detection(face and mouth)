@@ -1,0 +1,95 @@
+import cv2
+import mediapipe as mp
+import time
+
+# Initialize mediapipe face mesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+# Start video capture
+cap = cv2.VideoCapture(0)
+
+# Timer for updates
+last_update_time = time.time()
+horizontal_threshold = 0.05  # Horizontal movement sensitivity (left-right)
+vertical_threshold = 0.08    # Vertical movement sensitivity (up-down)
+forward_threshold = 0.1      # Forward movement sensitivity
+mouth_open_threshold = 0.03  # Mouth open sensitivity
+
+while cap.isOpened():
+    success, image = cap.read()
+    if not success:
+        break
+
+    # Preprocess image
+    image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
+    image.flags.writeable = False
+    results = face_mesh.process(image)
+    image.flags.writeable = True
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    img_h, img_w, _ = image.shape
+
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            # Extract landmarks for head orientation
+            left_eye = face_landmarks.landmark[33]
+            right_eye = face_landmarks.landmark[263]
+            nose_tip = face_landmarks.landmark[1]
+            chin = face_landmarks.landmark[152]  # Chin landmark
+
+            # Calculate distances for orientation detection
+            mid_eye_y = (left_eye.y + right_eye.y) / 2  # Midpoint of eyes (y-coordinate)
+            vertical_dist = nose_tip.y - mid_eye_y      # Vertical distance between nose tip and mid-eye level
+            face_height = abs(chin.y - mid_eye_y)       # Approximate face height
+
+            # Normalize vertical movement for consistent scaling
+            normalized_vertical_dist = vertical_dist / face_height
+
+            # Determine head pose
+            if normalized_vertical_dist > vertical_threshold:
+                orientation = "Looking Down"
+            elif normalized_vertical_dist < -vertical_threshold:
+                orientation = "Looking Up"
+            else:
+                orientation = "Neutral/Forward"
+
+            # Detect horizontal movements
+            nose_to_left_eye = nose_tip.x - left_eye.x
+            nose_to_right_eye = right_eye.x - nose_tip.x
+            if nose_to_left_eye > nose_to_right_eye + horizontal_threshold:
+                orientation = "Looking Right"
+            elif nose_to_right_eye > nose_to_left_eye + horizontal_threshold:
+                orientation = "Looking Left"
+
+            # Extract landmarks for mouth state
+            upper_lip = face_landmarks.landmark[13]
+            lower_lip = face_landmarks.landmark[14]
+            lip_distance = lower_lip.y - upper_lip.y
+            mouth_state = "Open" if lip_distance > mouth_open_threshold else "Closed"
+
+            # Print orientation and mouth state every 1 second
+            current_time = time.time()
+            if current_time - last_update_time >= 1:
+                print(f"Face Orientation: {orientation}, Mouth State: {mouth_state}")
+                last_update_time = current_time
+
+            # Draw landmarks for head orientation and mouth state
+            for idx, lm in enumerate(face_landmarks.landmark):
+                x, y = int(lm.x * img_w), int(lm.y * img_h)
+                cv2.circle(image, (x, y), 1, (0, 255, 0), -1)
+
+            # Display orientation and mouth state on the frame
+            cv2.putText(image, f"Orientation: {orientation}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.putText(image, f"Mouth: {mouth_state}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
+    # Show the image with landmarks
+    cv2.imshow('Face Orientation & Mouth Tracking', image)
+
+    # Break on 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
