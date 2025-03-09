@@ -1,0 +1,106 @@
+import cv2
+import mediapipe as mp
+import threading
+import time
+from tkinter import Tk, Label
+
+# Initialize MediaPipe FaceMesh
+mp_face_mesh = mp.solutions.face_mesh
+face_mesh = mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5)
+
+# Load Haar Cascade for face detection
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# Function to show a popup alert
+def show_popup(message):
+    def popup_thread():
+        popup = Tk()
+        popup.title("Alert")
+        popup.geometry("300x100")
+        label = Label(popup, text=message, font=("Arial", 14), fg="red")
+        label.pack(pady=20)
+        popup.after(3000, popup.destroy)  # Auto-close after 3 seconds
+        popup.mainloop()
+
+    threading.Thread(target=popup_thread, daemon=True).start()
+
+# Start video capture
+cap = cv2.VideoCapture(0)
+
+# Timer for mouth state updates
+last_update_time = time.time()
+
+print("Press 'q' to exit.")
+
+while cap.isOpened():
+    success, frame = cap.read()
+    if not success:
+        break
+
+    img_h, img_w, _ = frame.shape
+
+    # Convert frame to grayscale for face detection
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+    # Face detection using Haar Cascade
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(30, 30))
+
+    # Default message and color
+    face_message = "No Human Detected"
+    face_color = (0, 0, 255)  # Red for no face
+
+    if len(faces) == 1:
+        face_message = "One Human Detected"
+        face_color = (0, 255, 0)  # Green for one face
+    elif len(faces) > 1:
+        face_message = "More than one Human Detected"
+        face_color = (0, 0, 255)  # Red for multiple faces
+        show_popup("More than one human detected")  # Trigger popup alert
+
+    # Process frame for face landmarks (mouth detection)
+    rgb_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb_image)
+
+    mouth_message = "Mouth: Unknown"
+
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            # Extract landmarks for mouth detection
+            upper_lip = face_landmarks.landmark[13]
+            lower_lip = face_landmarks.landmark[14]
+            lip_distance = lower_lip.y - upper_lip.y
+
+            # Adaptive threshold for mouth opening
+            mouth_open_threshold = 0.03  # Tune as needed
+            mouth_state = "Open" if lip_distance > mouth_open_threshold else "Closed"
+            mouth_message = f"Mouth: {mouth_state}"
+
+            # Update mouth state every 1 second
+            current_time = time.time()
+            if current_time - last_update_time >= 1:
+                print(f"Mouth State: {mouth_state}")
+                last_update_time = current_time
+
+            # Draw landmarks on mouth area
+            for idx, lm in enumerate(face_landmarks.landmark):
+                x, y = int(lm.x * img_w), int(lm.y * img_h)
+                cv2.circle(frame, (x, y), 1, (0, 255, 0), -1)
+
+    # Draw rectangles around detected faces
+    for (x, y, w, h) in faces:
+        cv2.rectangle(frame, (x, y), (x + w, y + h), face_color, 2)
+
+    # Display status messages
+    cv2.putText(frame, face_message, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, face_color, 2)
+    cv2.putText(frame, mouth_message, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
+    # Show the image with face and mouth detection
+    cv2.imshow('Face & Mouth Detection', frame)
+
+    # Break loop on 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+# Cleanup
+cap.release()
+cv2.destroyAllWindows()
